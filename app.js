@@ -23,6 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initScrollObserver();
   initMobileNav();
   initActiveNavTracking();
+  initSafeMailHandler();
 });
 
 /**
@@ -204,4 +205,75 @@ function initActiveNavTracking() {
   };
 
   window.addEventListener('scroll', onScroll, { passive: true });
+}
+
+/**
+ * 8. SAFE MAIL HANDLER (Hybrid: Native-first, silent Gmail fallback)
+ *
+ * How it works:
+ * 1. User clicks any email button → tries native mailto (Outlook / Apple Mail)
+ * 2. If a mail app opens, window loses focus (blur event) → done, no fallback needed
+ * 3. If NO mail app is configured (e.g. client's Mac), window stays focused →
+ *    after 1.5s silently opens Gmail compose in a new tab as backup
+ *
+ * Result:
+ * - Windows → Outlook opens directly
+ * - Mac with mail app → Apple Mail opens directly
+ * - Mac WITHOUT mail app → Gmail compose opens silently (no error -10673, no popup)
+ * - Mobile → native mail app opens directly
+ */
+function initSafeMailHandler() {
+  // On mobile, native mailto always works — no handler needed
+  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  if (isMobile) return;
+
+  document.addEventListener('click', function(e) {
+    const link = e.target.closest('a[href^="mailto:"]');
+    if (!link) return;
+
+    e.preventDefault();
+
+    const href = link.getAttribute('href');
+
+    // Parse mailto components for Gmail fallback URL
+    const mailtoData = href.substring(7);
+    const qIndex = mailtoData.indexOf('?');
+    const to = decodeURIComponent(qIndex > -1 ? mailtoData.substring(0, qIndex) : mailtoData) || 'punit.rekhi@gmail.com';
+    const queryStr = qIndex > -1 ? mailtoData.substring(qIndex + 1) : '';
+
+    let subject = '';
+    let body = '';
+    if (queryStr) {
+      const params = new URLSearchParams(queryStr);
+      subject = params.get('subject') || '';
+      body = params.get('body') || '';
+    }
+
+    // Step 1: Try native mailto
+    let mailAppOpened = false;
+    const onBlur = function() {
+      mailAppOpened = true;
+    };
+    window.addEventListener('blur', onBlur);
+
+    // Trigger native mailto via hidden iframe (prevents page navigation on failure)
+    let iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    iframe.src = href;
+    document.body.appendChild(iframe);
+
+    // Step 2: After 1.5s, check if a mail app took focus
+    setTimeout(function() {
+      window.removeEventListener('blur', onBlur);
+      document.body.removeChild(iframe);
+
+      if (!mailAppOpened) {
+        // No mail app responded — silently open Gmail compose as fallback
+        let gmailUrl = 'https://mail.google.com/mail/?view=cm&fs=1&to=' + encodeURIComponent(to);
+        if (subject) gmailUrl += '&su=' + encodeURIComponent(subject);
+        if (body) gmailUrl += '&body=' + encodeURIComponent(body);
+        window.open(gmailUrl, '_blank', 'noopener,noreferrer');
+      }
+    }, 1500);
+  });
 }
